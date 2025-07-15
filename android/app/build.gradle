@@ -1,0 +1,155 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "kotlin-parcelize"
+    id "kotlinx-serialization"
+    id "com.google.devtools.ksp"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def pro = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        pro.load(reader)
+    }
+}
+
+static def releaseTime() {
+    return new Date().format("yy.MMddHH", TimeZone.getTimeZone("GMT+8"))
+}
+
+def version = "1." + releaseTime()
+def gitCommits = Integer.parseInt('git rev-list HEAD --count'.execute().text.trim())
+
+def openlistVersion = rootProject.file("../openlist_version").readLines()[0]
+
+android {
+    namespace "com.github.openlistteam.openlistflutter"
+    compileSdkVersion 34
+    ndkVersion "25.1.8937393"
+
+    signingConfigs {
+        release {
+            storeFile file(pro["KEY_PATH"])
+            storePassword pro["KEY_PASSWORD"]
+            keyAlias pro["ALIAS_NAME"]
+            keyPassword pro["ALIAS_PASSWORD"]
+        }
+    }
+
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId "com.github.openlistteam.openlistflutter"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
+        minSdkVersion flutter.minSdkVersion
+        targetSdkVersion flutter.targetSdkVersion
+        versionCode gitCommits
+        versionName version
+
+        ksp {
+            arg("room.schemaLocation", "$projectDir/schemas".toString())
+            arg("room.incremental", "true")
+            arg("room.expandProjection", "true")
+        }
+
+        buildConfigField("String", "OPENLIST_VERSION", "\"${openlistVersion}\"")
+    }
+
+
+    buildFeatures {
+        buildConfig true
+    }
+
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+            java.srcDirs = ['src/main/java', 'src/main/kotlin']
+        }
+    }
+
+    splits {
+        abi {
+            enable gradle.startParameter.taskNames.any { it.contains("Release") }
+            reset()
+            include 'armeabi-v7a', 'arm64-v8a', 'x86_64'
+            universalApk true
+        }
+    }
+
+    android.applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            //noinspection GrDeprecatedAPIUsage
+            def abiName = output.getFilter(com.android.build.OutputFile.ABI)
+            if (abiName == null)
+                output.outputFileName = "OpenListF-v${variant.versionName}.apk"
+            else
+                output.outputFileName = "OpenListF-v${variant.versionName}_${abiName}.apk"
+        }
+    }
+
+//    kotlin {
+//        jvmToolchain  = 17
+//    }
+
+    buildTypes {
+        release {
+            // TODO: Add your own signing config for the release build.
+            // Signing with the debug keys for now, so `flutter run --release` works.
+            signingConfig signingConfigs.release
+        }
+
+        debug {
+            ndk {
+                //noinspection ChromeOsAbiSupport
+//                abiFilters "arm64-v8a"
+//                abiFilters "x86"
+            }
+        }
+    }
+}
+
+flutter {
+    source '../..'
+}
+////获取flutter的sdk路径
+//def flutterRoot = localProperties.getProperty('flutter.sdk')
+//if (flutterRoot == null) {
+//    throw new Exception("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
+//}
+dependencies {
+    implementation fileTree(include: ['*.jar', '*.aar'], dir: 'libs')
+
+//    compileOnly files("$flutterRoot/bin/cache/artifacts/engine/android-arm/flutter.jar")
+    implementation project(":utils")
+    //noinspection GradleDependency
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.0.0'
+
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+
+    implementation 'com.louiscad.splitties:splitties-systemservices:3.0.0'
+
+    implementation 'com.github.cioccarellia:ksprefs:2.4.0'
+
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+
+    // Room
+//    implementation("androidx.room:room-runtime:$room_version")
+//    implementation("androidx.room:room-ktx:$room_version")
+//    ksp("androidx.room:room-compiler:$room_version")
+//    androidTestImplementation("androidx.room:room-testing:$room_version")
+
+
+}

@@ -1,0 +1,108 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      enable_codesign:
+        description: 'Enable code signing'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build_ios:
+    name: Build iOS
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.19.6'
+        channel: 'stable'
+        
+    - name: Install dependencies
+      run: flutter pub get
+      
+    - name: Generate Pigeon files (if exists)
+      run: |
+        if [ -f "pigeons/messages.dart" ]; then
+          flutter packages pub run pigeon --input pigeons/messages.dart
+        fi
+      
+    - name: Analyze code
+      run: flutter analyze
+      
+    - name: Run tests
+      run: flutter test
+      
+    - name: Setup iOS dependencies
+      run: |
+        cd ios
+        pod install
+    
+    # 无代码签名构建 (默认)
+    - name: Build iOS without code signing
+      if: ${{ !inputs.enable_codesign }}
+      run: |
+        flutter build ios --debug --no-codesign
+        flutter build ios --release --no-codesign
+    
+    # 带代码签名构建 (手动触发时)
+    - name: Import Code-Signing Certificates
+      if: ${{ inputs.enable_codesign }}
+      uses: Apple-Actions/import-codesign-certs@v2
+      with:
+        p12-file-base64: ${{ secrets.IOS_DIST_SIGNING_KEY }}
+        p12-password: ${{ secrets.IOS_DIST_SIGNING_KEY_PASSWORD }}
+    
+    - name: Download Provisioning Profiles
+      if: ${{ inputs.enable_codesign }}
+      uses: Apple-Actions/download-provisioning-profiles@v1
+      with:
+        bundle-id: com.github.openlistteam.openlistFlutter
+        profile-type: IOS_APP_STORE
+        issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+        api-key-id: ${{ secrets.APPSTORE_KEY_ID }}
+        api-private-key: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+    
+    - name: Build iOS with code signing
+      if: ${{ inputs.enable_codesign }}
+      run: |
+        flutter build ios --release
+    
+    - name: Archive and Export IPA
+      if: ${{ inputs.enable_codesign }}
+      run: |
+        xcodebuild -workspace ios/Runner.xcworkspace \
+                   -scheme Runner \
+                   -configuration Release \
+                   -destination generic/platform=iOS \
+                   -archivePath build/Runner.xcarchive \
+                   archive
+        
+        xcodebuild -exportArchive \
+                   -archivePath build/Runner.xcarchive \
+                   -exportPath build/ios_export \
+                   -exportOptionsPlist ios/ExportOptions-AppStore.plist
+    
+    - name: Upload iOS App (unsigned)
+      if: ${{ !inputs.enable_codesign }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenListFlutter-iOS-unsigned
+        path: build/ios/iphoneos/Runner.app
+    
+    - name: Upload IPA (signed)
+      if: ${{ inputs.enable_codesign }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenListFlutter-iOS-signed
+        path: build/ios_export/*.ipa

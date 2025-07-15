@@ -1,0 +1,163 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "master"
+    paths-ignore:
+      - "*.md"
+      - "*.sh"
+      - "release.yaml"
+  #      - "sync_frp.yaml"
+
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      output: "${{ github.workspace }}/build/app/outputs/apk/release"
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Download OpenList Source Code
+        run: |
+          cd $GITHUB_WORKSPACE/openlist-lib/scripts
+          chmod +x *.sh
+          ./init_openlist.sh
+          ./init_web.sh
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: 1.22
+          cache-dependency-path: ${{ github.workspace }}/openlist-lib/openlist/go.sum
+
+      - uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r25c
+
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v2.4.2
+
+      - name: Build OpenList
+        run: |
+          cd $GITHUB_WORKSPACE/openlist-lib/scripts
+          chmod +x *.sh
+          ./init_gomobile.sh
+          ./gobind.sh
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Upload AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: "OpenList"
+          path: "${{ github.workspace }}/android/app/libs/*.aar"
+
+      - name: Init Signature
+        run: |
+          touch local.properties
+          cd android
+          echo ALIAS_NAME='${{ secrets.ALIAS_NAME }}' >> local.properties
+          echo ALIAS_PASSWORD='${{ secrets.ALIAS_PASSWORD }}' >> local.properties
+          echo KEY_PASSWORD='${{ secrets.KEY_PASSWORD }}' >> local.properties
+          echo KEY_PATH='./key.jks' >> local.properties
+          # 从Secrets读取无换行符Base64解码, 然后保存到到app/key.jks
+          echo ${{ secrets.KEY_STORE }} | base64 --decode > $GITHUB_WORKSPACE/android/app/key.jks
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.6'
+      - run: flutter build apk --split-per-abi --release
+
+      - name: Upload missing_rules.txt
+        if: failure() && steps.gradle.outcome != 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: "missing_rules"
+          path: "${{ github.workspace }}/build/app/outputs/mapping/release/missing_rules.txt"
+
+      - name: Init APP Version Name
+        run: |
+          echo "ver_name=$(grep -m 1 'versionName' ${{ env.output }}/output-metadata.json | cut -d\" -f4)" >> $GITHUB_ENV
+
+      - name: Upload App To Artifact arm64-v8a
+        if: success () || failure ()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "OpenListFlutter-v${{ env.ver_name }}_arm64-v8a"
+          path: "${{ env.output }}/*-v8a.apk"
+
+      - name: Upload App To Artifact arm-v7a
+        if: success () || failure ()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "OpenListFlutter-v${{ env.ver_name }}_arm-v7a"
+          path: "${{ env.output }}/*-v7a.apk"
+
+      - name: Upload App To Artifact x86
+        if: success () || failure ()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "OpenListFlutter-v${{ env.ver_name }}_x86_64"
+          path: "${{ env.output }}/*64.apk"
+
+  ios:
+    runs-on: macos-latest
+    env:
+      output: "${{ github.workspace }}/build/ios/iphoneos"
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Download OpenList Source Code
+        run: |
+          cd $GITHUB_WORKSPACE/openlist-lib/scripts
+          chmod +x *.sh
+          ./init_openlist.sh
+          ./init_web.sh
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: 1.22
+          cache-dependency-path: ${{ github.workspace }}/openlist-lib/openlist/go.sum
+
+      - name: Build OpenList for iOS
+        run: |
+          cd $GITHUB_WORKSPACE/openlist-lib/scripts
+          chmod +x *.sh
+          ./init_gomobile.sh
+          # Note: iOS binding would need to be implemented separately
+          # This is a placeholder for iOS-specific OpenList binding
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.6'
+
+      - name: Install iOS dependencies
+        run: |
+          cd ios
+          pod install
+
+      - name: Build iOS app (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Init APP Version Name
+        run: |
+          echo "ver_name=$(grep -A 1 'CFBundleShortVersionString' ios/Runner/Info.plist | tail -1 | sed 's/.*<string>\(.*\)<\/string>.*/\1/')" >> $GITHUB_ENV
+
+      - name: Upload iOS App To Artifact
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "OpenListFlutter-iOS-v${{ env.ver_name }}"
+          path: "${{ env.output }}/Runner.app"
